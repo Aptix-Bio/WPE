@@ -5,7 +5,8 @@ Eclipse2-Digital-Edition and Iris-Core apply them), restated here so this
 repository stands alone, each with where it lives in `.github/`. Read this
 before writing or changing a workflow.
 
-This repository is public, so its standard GitHub-hosted runners are free: 4
+This repository is public, partly so its standard GitHub-hosted runners are
+free (Ryan, 2026-11-15; it holds nothing proprietary): 4
 CPUs, 16 GB of memory and a 14 GB SSD, x86_64 (`ubuntu-24.04`) and arm64
 (`ubuntu-24.04-arm`) (GitHub's runner reference and billing pages, read
 2026-11-15). A runner still does only work whose result is wanted, and never

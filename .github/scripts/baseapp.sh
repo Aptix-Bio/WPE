@@ -36,6 +36,12 @@ declare -A builder_commit=(
 # without X11 $DISPLAY", the first run, 2026-11-15; reproduced here with
 # DBUS_SESSION_BUS_ADDRESS unset, and gone under dbus-run-session).
 builder=(dbus-run-session -- flatpak run --user org.flatpak.Builder)
+build_args=(--user --install-deps-from=flathub --ccache --force-clean --disable-rofiles-fuse
+    --state-dir="$state" --repo="$repo" --jobs="$(nproc)" "$builddir" "$manifest")
+# ccache itself is the SDK's (the runner has none), run on the cache the builder
+# fills; no session bus needed (tried with DBUS_SESSION_BUS_ADDRESS unset, 2026-11-15).
+sdk=$(sed -n 's/^sdk: //p' "$manifest")//$(sed -n "s/^runtime-version: '\(.*\)'$/\1/p" "$manifest")
+ccache_sdk() { flatpak run --user --filesystem="$state/ccache" --env=CCACHE_DIR="$state/ccache" --command=ccache "$sdk" "$@"; }
 # The compiler cache, one archive per architecture in the build-cache bucket;
 # a pull request's under pr/, which main and releases never read and the
 # bucket deletes after 7 days (Iris-Core's tools/cloud_federation.sh).
@@ -110,11 +116,18 @@ cache-restore)
     printf 'max_size = 4G\n' > "$state/ccache/ccache.conf" ;;
 build)
     "${builder[@]}" --version
-    "${builder[@]}" --user --install-deps-from=flathub --ccache --force-clean --disable-rofiles-fuse \
-        --state-dir="$state" --repo="$repo" --jobs="$(nproc)" "$builddir" "$manifest" ;;
+    # The SDK first, for its ccache: this run's hits and misses alone, which
+    # cache-save prints, failed or timed-out builds' too.
+    "${builder[@]}" --install-deps-only "${build_args[@]}"
+    ccache_sdk --zero-stats
+    "${builder[@]}" "${build_args[@]}" ;;
 cache-save)
     prefix=$(access_prefix "${3:-}")
     [ -d "$state/ccache" ] || { echo "baseapp.sh: no compiler cache at $state/ccache" >&2; exit 1; }
+    # How much of this build the cache served. Only a build that stopped before
+    # the SDK was installed has none, and saying so is no reason to lose the cache.
+    if flatpak info --user "$sdk" > /dev/null 2>&1; then ccache_sdk --show-stats
+    else echo "baseapp.sh: $sdk is not installed; no compiler cache statistics" >&2; fi
     tar --zstd -cf "$work/ccache.tar.zst" -C "$state/ccache" .
     status=$(gcs POST "https://storage.googleapis.com/upload/storage/v1/b/$bucket/o?uploadType=media&name=${prefix//\//%2F}${object//\//%2F}" \
         -H "Content-Type: application/zstd" --data-binary "@$work/ccache.tar.zst")
