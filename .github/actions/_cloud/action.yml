@@ -1,0 +1,54 @@
+# Copyright (c) 2026 Aptix Bio. All rights reserved.
+#
+# The job signs in to Google Cloud by workload identity federation, with no
+# stored key, as one of the two build-cache accounts Iris-Core's
+# tools/cloud_federation.sh made, as Iris-Core's own _cloud action does.
+# Google, not this workflow, decides which account a run may use: the writer
+# only for release.yml on refs/heads/main, the reader for every other run,
+# which reads everything and writes only the pull requests' quarantine under
+# `pr/`; a pull request that asks for `write` is refused at sign-in. The
+# calling job needs `permissions: id-token: write`.
+#
+# Outputs `token`, an access token for one hour (masked), which the caller hands
+# only to the steps that use it, through `env:` (never $GITHUB_ENV, which every
+# later step would see). A build outlasts it, so the job signs in again before
+# it saves the cache.
+name: _cloud
+description: Sign in to Google Cloud by workload identity federation as the cache reader or writer
+outputs:
+  token:
+    description: an access token for one hour
+    value: ${{ steps.auth.outputs.access_token }}
+inputs:
+  access:
+    description: "`quarantine` (pull requests: reads all, writes under pr/) or `write` (release.yml on main only)"
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Cache account
+      id: account
+      shell: bash
+      env:
+        ACCESS: ${{ inputs.access }}
+      run: |
+        set -euo pipefail
+        case "${ACCESS}" in
+          quarantine) account=iris-core-cache-reader ;;
+          write)      account=iris-core-cache-writer ;;
+          *) echo "_cloud: access is '${ACCESS}'; expected quarantine or write" >&2; exit 1 ;;
+        esac
+        echo "email=${account}@iris-core-514620.iam.gserviceaccount.com" >> "${GITHUB_OUTPUT}"
+    - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      id: auth
+      with:
+        workload_identity_provider: projects/1077747666476/locations/global/workloadIdentityPools/github/providers/github-actions
+        service_account: ${{ steps.account.outputs.email }}
+        token_format: access_token
+        create_credentials_file: false
+    - name: Token
+      shell: bash
+      env:
+        TOKEN: ${{ steps.auth.outputs.access_token }}
+      run: |
+        test -n "${TOKEN}" || { echo "_cloud: the sign-in returned no access token" >&2; exit 1; }

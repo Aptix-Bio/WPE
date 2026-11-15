@@ -1,0 +1,106 @@
+# Copyright (c) 2026 Aptix Bio. All rights reserved.
+#
+# Only where a result is wanted (ci_runners.md): a pull request that is not a
+# draft, marking it ready starts the run; and by hand. Never on a push to a
+# branch. A pull request that changes only documents builds nothing, and
+# `ci-result`, the one check a ruleset requires, still reports, so it never
+# waits forever.
+#
+# Both architectures build side by side: the same price on this public
+# repository's standard runners (free), and neither uses the other's output.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+# A new commit to a pull request cancels its running run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  changes:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.changes.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: What changed
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # By hand: build. A pull request: build unless every file it changes is a document.
+          if [ -z "${BASE}" ] || git diff --name-only "${BASE}" HEAD | grep -qvE '(^development/|\.md$)'; then
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "build=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+  tests:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The package check's own tests
+        run: python3 -m unittest discover -s tests
+
+  # After the check's own tests: a broken check would let a broken build pass.
+  build:
+    needs: [changes, tests]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/_build.yml
+    with:
+      arch: ${{ matrix.arch }}
+      runner: ${{ matrix.runner }}
+      access: quarantine
+      # A pull request's bundles, to try before merging (Eclipse2's rule: two days).
+      retention-days: 2
+
+  ci-result:
+    if: always()
+    needs: [changes, tests, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every job that should have run passed
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          BUILD_WANTED: ${{ needs.changes.outputs.build }}
+          TESTS: ${{ needs.tests.result }}
+          BUILD: ${{ needs.build.result }}
+        run: |
+          set -euo pipefail
+          test "${CHANGES}" = success || { echo "changes: ${CHANGES}" >&2; exit 1; }
+          if [ "${BUILD_WANTED}" = true ]; then
+            test "${TESTS}" = success || { echo "tests: ${TESTS}" >&2; exit 1; }
+            test "${BUILD}" = success || { echo "build: ${BUILD}" >&2; exit 1; }
+          fi
+          echo "ci-result: passed (build wanted: ${BUILD_WANTED})"

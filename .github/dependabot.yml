@@ -1,0 +1,15 @@
+# Copyright (c) 2026 Aptix Bio. All rights reserved.
+# The actions' commit pins, proposed weekly as one pull request. WPE's own pin
+# moves with WebKit's security advisories instead (Iris-Core's PipelineRule_42).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # A week before a new release is proposed, so one pulled for a compromise never lands.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]

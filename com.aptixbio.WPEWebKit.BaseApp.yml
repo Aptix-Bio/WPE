@@ -1,0 +1,122 @@
+# Copyright (c) 2026 Aptix Bio. All rights reserved.
+#
+# WPE WebKit with its WPEPlatform, built once per architecture as a Flatpak
+# BaseApp that Iris Slide Viewer's Flatpak builds on (Aptix-Bio/Iris-Core,
+# host/linux/flatpak; Q50 amended 2026-11-14, Ryan: "Keep WPE"). No Flatpak
+# runtime carries WPE, so building it here, on CI runners and only when its pin
+# moves, keeps WebKit's hours-long compile out of every app build.
+#
+# Built by .github/workflows/_build.yml; locally, from this folder:
+#   flatpak-builder --user --install-deps-from=flathub --ccache \
+#       build com.aptixbio.WPEWebKit.BaseApp.yml
+id: com.aptixbio.WPEWebKit.BaseApp
+# The WPE series; a security release inside it keeps the branch, and RELEASE
+# names the exact build.
+branch: '2.54'
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+# The compiler: LLVM 23, Iris-Core's pinned LLVM's major, as GNOME builds WebKit
+# with Clang (gnome-build-meta's elements/sdk/webkitgtk.bst, read 2026-11-14).
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.llvm23
+# A BaseApp has no launcher or icon of its own, so nothing to compose.
+appstream-compose: false
+separate-locales: false
+build-options:
+  append-path: /usr/lib/sdk/llvm23/bin
+  prepend-ld-library-path: /usr/lib/sdk/llvm23/lib
+  env:
+    CC: clang
+    CXX: clang++
+
+modules:
+  # libyaml for Ruby's YAML (psych), which WebKit's preference generator
+  # loads; the SDK has none (measured 2026-11-14: without it WPE's build stops
+  # at GeneratePreferences.rb, "cannot load such file -- psych"). The newest
+  # release on pyyaml.org/wiki/LibYAML (read 2026-11-14). Build only.
+  - name: libyaml
+    buildsystem: autotools
+    cleanup:
+      - '*'
+    sources:
+      - type: archive
+        url: https://pyyaml.org/download/libyaml/yaml-0.2.5.tar.gz
+        sha256: c642ae9b75fee120b2d96c712538bd2cf283228d2337df2cf2988e3c02678ef4
+
+  # JavaScriptCore's offline assembler is Ruby; the SDK has none. Build only.
+  - name: ruby
+    buildsystem: autotools
+    config-opts:
+      - --disable-install-doc
+      - --disable-install-rdoc
+      - --without-gmp
+    cleanup:
+      - '*'
+    sources:
+      - type: archive
+        url: https://cache.ruby-lang.org/pub/ruby/4.0/ruby-4.0.9.tar.xz
+        sha256: a8057adb39f51ad6dc3106237504c93dd792bb515837b4fe7817ae21ed7e51f4
+
+  # WPE WebKit 2.54.2 and its WPEPlatform, from wpewebkit.org's release, its
+  # SHA-256 the one the release's .sums file publishes (read 2026-11-14).
+  # Options after gnome-build-meta's elements/sdk/webkitgtk.bst (read
+  # 2026-11-14: Clang, no libbacktrace, no speech synthesis, no precompiled
+  # headers), with what the HUD does not use turned off. The web process is
+  # sandboxed through flatpak-spawn --sandbox, which the 2.0 API always asks for
+  # inside a Flatpak whatever ENABLE_BUBBLEWRAP_SANDBOX says
+  # (ProcessLauncherGLib.cpp, 2.54.2), so bubblewrap, which the SDK lacks, is
+  # off. The headers and pkg-config files stay: the app builds against them,
+  # and its manifest removes them from what it ships.
+  - name: wpewebkit
+    buildsystem: cmake-ninja
+    build-options:
+      # Stripped in this module's own stage. Skipping debug processing instead
+      # (no-debuginfo) left the library for a later module's stage to split,
+      # and a later module's cleanup then took it as its own and deleted it
+      # (measured 2026-11-14, Iris-Core's Flatpak).
+      strip: true
+      env:
+        # One link at a time, whatever --jobs allows: each of WebKit's takes
+        # several GB, and WebKitCommon.cmake allows 4 at once in Release
+        # (2.54.2). Three jobs ran a 7 GB builder out of memory (2026-11-14).
+        WEBKIT_NINJA_LINK_MAX: '1'
+      arch:
+        # Return addresses signed, as gnome-build-meta's webkitgtk.bst does on
+        # aarch64, in place of the SDK's default, which also marks the library
+        # for BTI: JavaScriptCore's interpreter is generated assembly with no
+        # BTI landing pads, so its first indirect branch faulted (SIGILL,
+        # ILL_ILLOPC, at an opcode handler reached by `br x13`; measured
+        # 2026-11-14).
+        aarch64:
+          cflags: -mbranch-protection=pac-ret
+          cxxflags: -mbranch-protection=pac-ret
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DPORT=WPE
+      - -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+      # The app's own WPEPlatform (Iris-Core host/linux/hud_view.cpp) and the
+      # headless one.
+      - -DENABLE_WPE_PLATFORM=ON
+      - -DENABLE_WPE_PLATFORM_DRM=OFF
+      - -DENABLE_WPE_PLATFORM_WAYLAND=OFF
+      - -DENABLE_WPE_LEGACY_API=OFF
+      - -DENABLE_BUBBLEWRAP_SANDBOX=OFF
+      - -DENABLE_DOCUMENTATION=OFF
+      - -DENABLE_INTROSPECTION=OFF
+      - -DENABLE_JOURNALD_LOG=OFF
+      - -DENABLE_MINIBROWSER=OFF
+      - -DENABLE_WEBDRIVER=OFF
+      - -DENABLE_SPEECH_SYNTHESIS=OFF
+      - -DENABLE_SPELLCHECK=OFF
+      - -DUSE_LIBHYPHEN=OFF
+      - -DUSE_LIBBACKTRACE=OFF
+      - -DUSE_SYSPROF_CAPTURE=OFF
+      - -DUSE_SYSTEM_UNIFDEF=OFF
+      - -DUSE_WOFF2=OFF
+    cleanup:
+      - /share/wpe-webkit-2.0/*.gir
+    sources:
+      - type: archive
+        url: https://wpewebkit.org/releases/wpewebkit-2.54.2.tar.xz
+        sha256: f3284e19e47fcb5ac8c63c2e1c113dbd65b2423eb8a545f5b345707829004f56

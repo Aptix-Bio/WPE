@@ -1,0 +1,97 @@
+# Copyright (c) 2026 Aptix Bio. All rights reserved.
+#
+# MODULE — called by ci.yml and release.yml, never run on its own. A leading
+# `_` marks a module; the entry points are the workflow files without one.
+#
+# One architecture's BaseApp: built, checked and bundled, exactly as a release
+# builds it, so a pull request proves what its release will ship. The commands
+# are .github/scripts/baseapp.sh's, one phase a step. The compiler cache is
+# restored before the build and saved right after it, a failed or timed-out
+# build's too, so the next run continues where this one stopped (ci_runners.md).
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: x86_64 or aarch64
+        type: string
+        required: true
+      runner:
+        description: the runner image, pinned (ubuntu-24.04, ubuntu-24.04-arm)
+        type: string
+        required: true
+      access:
+        description: "the cache: `quarantine` for pull requests, `write` for release.yml on main"
+        type: string
+        default: quarantine
+      ref:
+        description: the commit or tag to build; empty for the caller's
+        type: string
+        default: ''
+      retention-days:
+        description: how long the bundle is kept (2 for a pull request's, 1 for a release's until attached)
+        type: number
+        required: true
+
+permissions: {}
+
+jobs:
+  build:
+    name: ${{ inputs.arch }}
+    runs-on: ${{ inputs.runner }}
+    # The build step's own bound is shorter, so a slow build still saves its cache.
+    timeout-minutes: 345
+    permissions:
+      contents: read
+      id-token: write   # workload identity federation for the compiler cache (_cloud)
+    env:
+      ARCH: ${{ inputs.arch }}
+      ACCESS: ${{ inputs.access }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Packages
+        run: .github/scripts/baseapp.sh "$ARCH" packages
+
+      # ── The compiler cache, before anything compiles ──
+      - id: cloud
+        uses: ./.github/actions/_cloud
+        with:
+          access: ${{ inputs.access }}
+      - name: Restore the compiler cache
+        env:
+          WPE_GCS_TOKEN: ${{ steps.cloud.outputs.token }}
+        run: .github/scripts/baseapp.sh "$ARCH" cache-restore "$ACCESS"
+
+      # ── Build ──
+      - name: Build
+        id: build
+        timeout-minutes: 300
+        run: .github/scripts/baseapp.sh "$ARCH" build
+      # The token from before the build has expired by now: sign in again.
+      - id: cloud-again
+        if: always() && steps.build.outcome != 'skipped'
+        uses: ./.github/actions/_cloud
+        with:
+          access: ${{ inputs.access }}
+      - name: Save the compiler cache
+        if: always() && steps.build.outcome != 'skipped'
+        env:
+          WPE_GCS_TOKEN: ${{ steps.cloud-again.outputs.token }}
+        run: .github/scripts/baseapp.sh "$ARCH" cache-save "$ACCESS"
+
+      # ── What it ships ──
+      - name: Check
+        run: .github/scripts/baseapp.sh "$ARCH" check
+      - name: Bundle
+        run: .github/scripts/baseapp.sh "$ARCH" bundle
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: baseapp-${{ inputs.arch }}
+          path: out/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

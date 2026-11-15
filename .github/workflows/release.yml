@@ -1,0 +1,120 @@
+# Copyright (c) 2026 Aptix Bio. All rights reserved.
+#
+# The only way a release is made (Eclipse2's rule): run by hand from main, it
+# tags the commit with RELEASE's version, builds both architectures through
+# _build.yml in this same run, and attaches the bundles, their SHA-256s and a
+# build-provenance attestation to the tag's GitHub Release. No tag triggers a
+# workflow, and a ruleset refuses tags pushed any other way, so nothing else can
+# start a release build. A failed build is retried with "Re-run failed jobs",
+# which keeps the tag; "Re-run all jobs" fails at the tag, already made.
+#
+# Iris-Core's tools/bootstrap.py pins each bundle by version and SHA-256.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Two runs must not tag the same RELEASE; only this job, so builds may overlap.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    permissions:
+      contents: write   # the tag
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tag RELEASE on main
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = refs/heads/main || { echo "::error::run from main, not ${GITHUB_REF}"; exit 1; }
+          release=$(tr -d '[:space:]' < RELEASE)
+          [[ "${release}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]] || { echo "::error::RELEASE is '${release}', not <WPE version>-<build>"; exit 1; }
+          tag="v${release}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+            echo "::error::${tag} exists: raise RELEASE's build number in a pull request"; exit 1
+          fi
+          object=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags" -f tag="${tag}" -f message="WPE WebKit BaseApp ${release}" \
+            -f object="${GITHUB_SHA}" -f type=commit --jq .sha)
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${tag}" -f sha="${object}" >/dev/null
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "::notice::${tag} tagged on ${GITHUB_SHA::7}"
+
+  build:
+    needs: tag
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/_build.yml
+    with:
+      arch: ${{ matrix.arch }}
+      runner: ${{ matrix.runner }}
+      access: write
+      ref: ${{ needs.tag.outputs.tag }}
+      # Only until the Release has them.
+      retention-days: 1
+
+  publish:
+    needs: [tag, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write       # the Release
+      id-token: write       # the attestation's signing certificate
+      attestations: write
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: baseapp-*
+          path: out
+          merge-multiple: true
+      - name: Both architectures, as their SHA-256s say
+        run: |
+          set -euo pipefail
+          cd out
+          for arch in x86_64 aarch64; do
+            ls ./*"-${arch}.flatpak" >/dev/null || { echo "::error::no ${arch} bundle"; exit 1; }
+          done
+          sha256sum -c ./*.sha256
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: out/*.flatpak
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          url=$(sed -n 's/^ *url: \(https:\/\/wpewebkit.org\/releases\/.*\)$/\1/p' com.aptixbio.WPEWebKit.BaseApp.yml)
+          {
+            echo "WPE WebKit ${TAG#v} built as the Flatpak BaseApp com.aptixbio.WPEWebKit.BaseApp, for x86_64 and aarch64."
+            echo
+            echo "Built from ${url} (LGPL-2.1, with BSD-licensed parts) by com.aptixbio.WPEWebKit.BaseApp.yml at this tag."
+            echo
+            echo '```'
+            cat out/*.sha256
+            echo '```'
+          } > notes.md
+          gh release create "${TAG}" out/*.flatpak out/*.sha256 --verify-tag --title "WPE WebKit ${TAG#v}" --notes-file notes.md
