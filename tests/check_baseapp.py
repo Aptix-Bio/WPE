@@ -3,7 +3,9 @@
 build that exits 0 with something wrong in it fails (ci_runners.md: fail
 loudly):
 
-    python3 tests/check_baseapp.py <build folder> <x86_64|aarch64> <RELEASE file>
+    python3 tests/check_baseapp.py <build folder> <x86_64|aarch64> <WPE version>
+
+(the version the manifest pins: .github/scripts/release_tag.sh version)
 
 - its metadata names this BaseApp on the Freedesktop 26.08 runtime of the
   architecture it was built for;
@@ -14,7 +16,7 @@ loudly):
 - it and WPEWebProcess need no X11 or XCB library: Iris Slide Viewer is
   Wayland only;
 - the headers and pkg-config files the app builds against are there, at the
-  version RELEASE names;
+  version the manifest pins;
 - the build-only modules, libyaml and Ruby, left nothing.
 """
 
@@ -36,7 +38,7 @@ HEADERS = "files/include/wpe-webkit-2.0"
 LIBRARY_BYTES = (40 << 20, 600 << 20)
 X11 = re.compile(r"\[(libX11|libxcb|libXext|libGLX)[^]]*\]")
 BUILD_ONLY = ("files/bin/ruby", "files/lib/libruby*", "files/lib/libyaml*", "files/include/yaml.h")
-RELEASE = re.compile(r"^(\d+\.\d+\.\d+)-(\d+)$")
+VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 
 # readelf, given an option and a binary, returning what it printed.
 Readelf = Callable[[str, Path], str]
@@ -49,15 +51,13 @@ def readelf_at(program: str) -> Readelf:
     return run
 
 
-def problems(root: Path, arch: str, release: str, readelf: Readelf) -> list[str]:
+def problems(root: Path, arch: str, version: str, readelf: Readelf) -> list[str]:
     """Everything wrong with the BaseApp in `root`, each a sentence; none when it is whole."""
     found: list[str] = []
     if arch not in ARCHES:
         return [f"architecture '{arch}' is not one of {', '.join(ARCHES)}"]
-    matched = RELEASE.match(release.strip())
-    if matched is None:
-        return [f"RELEASE is '{release.strip()}', not <WPE version>-<build>, e.g. 2.54.2-1"]
-    version = matched.group(1)
+    if VERSION.match(version) is None:
+        return [f"the WPE version is '{version}', not x.y.z, e.g. 2.54.2"]
 
     metadata = root / "metadata"
     text = metadata.read_text() if metadata.is_file() else ""
@@ -92,7 +92,7 @@ def problems(root: Path, arch: str, release: str, readelf: Readelf) -> list[str]
             continue
         versions = re.findall(r"^Version:\s*(\S+)", pc.read_text(), re.MULTILINE)
         if versions != [version]:
-            found.append(f"{pc.name} says version {versions}, RELEASE says {version}")
+            found.append(f"{pc.name} says version {versions}; the manifest pins {version}")
     if not (root / HEADERS).is_dir():
         found.append(f"{HEADERS} is missing: the app builds against it")
 
@@ -106,12 +106,12 @@ def main(arguments: list[str]) -> int:
     if len(arguments) != 3:
         print(__doc__, file=sys.stderr)
         return 2
-    root, arch, release_file = Path(arguments[0]), arguments[1], Path(arguments[2])
-    found = problems(root, arch, release_file.read_text(), readelf_at("readelf"))
+    root, arch, version = Path(arguments[0]), arguments[1], arguments[2]
+    found = problems(root, arch, version, readelf_at("readelf"))
     for problem in found:
         print(f"check_baseapp: {problem}", file=sys.stderr)
     if not found:
-        print(f"check_baseapp: {root} is {ID} {release_file.read_text().strip()} for {arch}")
+        print(f"check_baseapp: {root} is {ID} with WPE {version} for {arch}")
     return 1 if found else 0
 
 

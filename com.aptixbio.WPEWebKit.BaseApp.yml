@@ -10,8 +10,9 @@
 #   flatpak-builder --user --install-deps-from=flathub --ccache \
 #       build com.aptixbio.WPEWebKit.BaseApp.yml
 id: com.aptixbio.WPEWebKit.BaseApp
-# The WPE series; a security release inside it keeps the branch, and RELEASE
-# names the exact build.
+# The WPE series; a security release inside it keeps the branch, and the
+# release's tag names the exact build (.github/scripts/release_tag.sh checks
+# the branch is the pinned version's line).
 branch: '2.54'
 runtime: org.freedesktop.Platform
 runtime-version: '26.08'
