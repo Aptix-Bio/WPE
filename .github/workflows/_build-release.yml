@@ -1,0 +1,93 @@
+# Copyright (c) 2026 Aptix Bio. All rights reserved.
+#
+# MODULE — called by release.yml, never run on its own. A leading `_` marks a
+# module; the entry points are the workflow files without one.
+#
+# A release, once release.yml has tagged it: both architectures built through
+# _build.yml from the tag, side by side, writing main's compiler cache; then one
+# job checks both bundles against their SHA-256s, attests their provenance and
+# attaches them to the tag's GitHub Release. `workflow_call` only, so a release
+# builds from nowhere but release.yml (Eclipse2's _build-release.yml).
+#
+#   build (x86_64) ─┐
+#                   ├─> publish ──> Release v<WPE version>-<build>
+#   build (aarch64) ┘
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: the tag to build and attach to (v2.54.2-1)
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      id-token: write   # the compiler cache (_cloud)
+    uses: ./.github/workflows/_build.yml
+    with:
+      arch: ${{ matrix.arch }}
+      runner: ${{ matrix.runner }}
+      access: write
+      tag: ${{ inputs.tag }}
+      # Only until the Release has them.
+      retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write       # the Release
+      id-token: write       # the attestation's signing certificate
+      attestations: write
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: baseapp-*
+          path: out
+          merge-multiple: true
+      - name: Both architectures, named for the tag, as their SHA-256s say
+        run: |
+          set -euo pipefail
+          cd out
+          for arch in x86_64 aarch64; do
+            ls "./com.aptixbio.WPEWebKit.BaseApp-${TAG#v}-${arch}.flatpak" >/dev/null || { echo "::error::no ${arch} bundle for ${TAG}"; exit 1; }
+          done
+          sha256sum -c ./*.sha256
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: out/*.flatpak
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          url=$(sed -n 's/^ *url: \(https:\/\/wpewebkit.org\/releases\/.*\)$/\1/p' com.aptixbio.WPEWebKit.BaseApp.yml)
+          {
+            echo "WPE WebKit ${TAG#v} built as the Flatpak BaseApp com.aptixbio.WPEWebKit.BaseApp, for x86_64 and aarch64."
+            echo
+            echo "Built from ${url} (LGPL-2.1, with BSD-licensed parts) by com.aptixbio.WPEWebKit.BaseApp.yml at this tag."
+            echo
+            echo '```'
+            cat out/*.sha256
+            echo '```'
+          } > notes.md
+          gh release create "${TAG}" out/*.flatpak out/*.sha256 --verify-tag --title "WPE WebKit ${TAG#v}" --notes-file notes.md

@@ -53,8 +53,8 @@ class CheckTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.folder.cleanup()
 
-    def problems(self, arch: str = "aarch64", release: str = "2.54.2-1", readelf: check.Readelf | None = None) -> list[str]:
-        return check.problems(self.root, arch, release, readelf or fake_readelf())
+    def problems(self, arch: str = "aarch64", version: str = "2.54.2", readelf: check.Readelf | None = None) -> list[str]:
+        return check.problems(self.root, arch, version, readelf or fake_readelf())
 
     def test_a_good_baseapp_passes(self) -> None:
         baseapp(self.root)
@@ -92,7 +92,7 @@ class CheckTest(unittest.TestCase):
         self.assertTrue(any("wpe-platform-2.0.pc" in p for p in found))
         self.assertTrue(any("include" in p for p in found))
 
-    def test_a_version_other_than_release_fails(self) -> None:
+    def test_a_version_other_than_the_pinned_one_fails(self) -> None:
         baseapp(self.root, version="2.54.1")
         self.assertTrue(any("2.54.1" in p for p in self.problems()))
 
@@ -106,9 +106,9 @@ class CheckTest(unittest.TestCase):
         (self.root / "files/bin/ruby").write_text("")
         self.assertTrue(any("ruby" in p for p in self.problems()))
 
-    def test_a_release_that_is_not_version_dash_build_fails(self) -> None:
+    def test_a_version_that_is_not_x_y_z_fails(self) -> None:
         baseapp(self.root)
-        self.assertTrue(any("RELEASE" in p for p in self.problems(release="2.54.2")))
+        self.assertTrue(any("x.y.z" in p for p in self.problems(version="2.54.2-1")))
 
 
 if __name__ == "__main__":

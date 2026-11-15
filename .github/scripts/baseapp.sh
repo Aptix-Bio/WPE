@@ -9,7 +9,10 @@
 #
 # cache-restore and cache-save take the cache access, `quarantine` (pull
 # requests: read main's, write under pr/) or `write` (release.yml on main), and
-# need WPE_GCS_TOKEN (the _cloud action). Runs outside a runner too, from the
+# need WPE_GCS_TOKEN (the _cloud action). A release's run names its tag in
+# WPE_TAG (v<version>-<n>, .github/scripts/release_tag.sh), which names the
+# bundle; any other run's bundle is named for the WPE version alone. Runs
+# outside a runner too, from the
 # repository's root, with flatpak and flatpak-builder installed (packages is
 # the runner's own setup, Ubuntu 24.04's).
 set -euo pipefail
@@ -19,7 +22,13 @@ case $arch in x86_64|aarch64) ;; *) echo "baseapp.sh: unknown architecture $arch
 
 id=com.aptixbio.WPEWebKit.BaseApp
 manifest=$id.yml
-release=$(tr -d '[:space:]' < RELEASE)
+version=$(.github/scripts/release_tag.sh version)
+if [ -n "${WPE_TAG:-}" ]; then
+    [[ $WPE_TAG =~ ^v${version//./\.}-[1-9][0-9]*$ ]] || { echo "baseapp.sh: WPE_TAG is '$WPE_TAG'; the manifest pins WPE $version" >&2; exit 2; }
+    release=${WPE_TAG#v}
+else
+    release=$version
+fi
 branch=$(sed -n "s/^branch: '\(.*\)'$/\1/p" "$manifest")
 : "${branch:?$manifest names no branch}"
 work=${WORK:-$PWD/_work}
@@ -134,7 +143,7 @@ cache-save)
     [ "$status" = 200 ] || { echo "baseapp.sh: writing gs://$bucket/$prefix$object returned HTTP $status" >&2; exit 1; }
     echo "baseapp.sh: saved gs://$bucket/$prefix$object, $(du -h "$work/ccache.tar.zst" | cut -f1)" ;;
 check)
-    python3 tests/check_baseapp.py "$builddir" "$arch" RELEASE ;;
+    python3 tests/check_baseapp.py "$builddir" "$arch" "$version" ;;
 bundle)
     mkdir -p "$out"
     flatpak build-bundle --arch="$arch" "$repo" "$bundle" "$id" "$branch"

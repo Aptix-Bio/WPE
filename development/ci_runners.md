@@ -16,18 +16,19 @@ the same work twice: one WebKit build takes hours.
 
 | Rule | Here |
 |---|---|
-| Only where a result is wanted: non-draft pull requests, releases, by hand. Never on a branch push or for documents only | `ci.yml`: `pull_request` (not drafts) and `workflow_dispatch`; its `changes` job builds nothing for a change to documents alone, and `ci-result` reports either way. `release.yml` is the only way a release builds: by hand, from `main` |
+| Only where a result is wanted: non-draft pull requests, releases, by hand. Never on a branch push or for documents only | `ci.yml`: `pull_request` (not drafts) and `workflow_dispatch`; its `changes` job builds nothing for a change to documents alone, and `ci-result` reports either way. `release.yml` is the only way a release builds: by hand, from `main`; it calls `_build-release.yml`, which has no trigger of its own |
 | A new commit cancels its pull request's running run | `ci.yml` `concurrency` |
 | Serialize only what must be | `release.yml`: the `release` group on the `tag` job only |
 | Cheapest first | Both cells are Linux at the same price, so they run side by side; the package check's own tests run before either (`ci.yml` `tests`), since a broken check would pass a broken build |
-| Prove it locally first, and check that the local run can fail as the runner would | The manifest's aarch64 build was proven on an Arch Linux ARM machine (Iris-Core's Flatpak, 2026-11-14), where it also failed as a runner would: out of memory at three jobs, a BTI fault, a deleted library. x86_64 cannot be built locally there, so `tests/check_baseapp.py` asserts what matters directly on every build: the library a file and stripped, no BTI on aarch64, no X11, the headers and pkg-config files at RELEASE's version. Its rules are tested on fake folders (`tests/test_check_baseapp.py`) |
+| Prove it locally first, and check that the local run can fail as the runner would | The manifest's aarch64 build was proven on an Arch Linux ARM machine (Iris-Core's Flatpak, 2026-11-14), where it also failed as a runner would: out of memory at three jobs, a BTI fault, a deleted library. x86_64 cannot be built locally there, so `tests/check_baseapp.py` asserts what matters directly on every build: the library a file and stripped, no BTI on aarch64, no X11, the headers and pkg-config files at the pinned version. Its rules are tested on fake folders (`tests/test_check_baseapp.py`) |
 
 ## Workflows are modules
 
 | Rule | Here |
 |---|---|
-| A module (`workflow_call` only) starts with `_`; an entry point does not | `_build.yml` is the module; `ci.yml` and `release.yml` are entry points. Composite actions are modules too: `.github/actions/_cloud` |
-| One reusable workflow per build, called per architecture | `_build.yml`, called by `ci.yml` and `release.yml` once per architecture, with what differs as inputs (the cache's access, the bundle's retention) |
+| A module (`workflow_call` only) starts with `_`; an entry point does not | `_build.yml` (one architecture) and `_build-release.yml` (both, then the Release) are modules; `ci.yml` and `release.yml` are entry points. Composite actions are modules too: `.github/actions/_cloud` |
+| One reusable workflow per build, called per architecture | `_build.yml`, called by `ci.yml` and `_build-release.yml` once per architecture, with what differs as inputs (the cache's access, the release's tag, the bundle's retention) |
+| Tags are counted, never typed (Ryan, 2026-11-15: "We'll want auto-tagging") | `release.yml`'s `tag` job tags `v<WPE version>-<build>`: the version the manifest pins, the build number one more than that version's highest tag (`.github/scripts/release_tag.sh`, tested by `tests/test_release_tag.py`), as Eclipse2's `tools/next_release_tag.sh` counts its builds |
 | Commands in a script, not YAML | `.github/scripts/baseapp.sh`, one phase a step (`packages`, `cache-restore`, `build`, `cache-save`, `check`, `bundle`); shellcheck-clean, runnable outside a runner |
 | Prebuilt over built | The Freedesktop SDK, its LLVM extension and Flathub's `org.flatpak.Builder` come prebuilt; WPE is built here precisely so Iris-Core's builds get it prebuilt |
 
@@ -47,4 +48,4 @@ the same work twice: one WebKit build takes hours.
 | Pin what can move | Runner images (`ubuntu-24.04`, `ubuntu-24.04-arm`); actions by commit SHA, updated by Dependabot; `org.flatpak.Builder` by Flathub commit per architecture; WPE, Ruby and libyaml by version and SHA-256 |
 | Survive a mirror outage | `baseapp.sh` `apt_install`: one retry through kernel.org's Ubuntu mirror (x86_64; kernel.org has no ubuntu-ports) |
 | Bound everything | A timeout on every job and on the build step; `WEBKIT_NINJA_LINK_MAX=1`, one WebKit link at a time in 16 GB; `packages` fails unless 25 GB of disk is free |
-| Fail loudly | `check_baseapp.py` before bundling; the bundle must be non-empty and under GitHub's 2 GiB asset limit; `release.yml` checks both architectures and their SHA-256s before it publishes, and refuses a RELEASE already tagged |
+| Fail loudly | `check_baseapp.py` before bundling; the bundle must be non-empty and under GitHub's 2 GiB asset limit; `release.yml` checks both architectures and their SHA-256s before it publishes, and a tag that exists already fails at its creation |

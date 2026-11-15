@@ -9,7 +9,7 @@ carries WPE.
 ## Releases
 
 Each [Release](../../releases) carries one bundle per architecture,
-`com.aptixbio.WPEWebKit.BaseApp-<release>-<arch>.flatpak`, its SHA-256, and a
+`com.aptixbio.WPEWebKit.BaseApp-<WPE version>-<build>-<arch>.flatpak`, its SHA-256, and a
 build-provenance attestation. To use one:
 
 ```bash
@@ -28,17 +28,20 @@ against; the app removes them from what it ships (`cleanup-commands`).
 
 ## Building
 
-`RELEASE` names the build, `<WPE version>-<build>`. A WPE security release or a
-change to the build is a pull request that moves the manifest's pin and
-`RELEASE`; its CI builds both architectures exactly as the release will, and
-`release.yml`, run by hand from `main`, tags, builds and publishes. How this
+A release is tagged `v<WPE version>-<build>`, counted, never typed: the version
+is the one the manifest pins, and the build number counts that version's tags
+(`.github/scripts/release_tag.sh`), so a WPE bump starts at 1 and a rebuild of
+the same WPE takes the next. A WPE security release or a change to the build
+is a pull request; its CI builds both architectures exactly as the release
+will, and `release.yml`, run by hand from `main`, tags the next build, then
+builds and publishes it through `_build-release.yml`. How this
 repository uses its runners: [development/ci_runners.md](development/ci_runners.md).
 
 Locally, with flatpak-builder and the Flathub remote:
 
 ```bash
 flatpak-builder --user --install-deps-from=flathub --ccache build com.aptixbio.WPEWebKit.BaseApp.yml
-python3 tests/check_baseapp.py build "$(uname -m)" RELEASE
+python3 tests/check_baseapp.py build "$(uname -m)" "$(.github/scripts/release_tag.sh version)"
 ```
 
 WebKit's build needs about 25 GB of disk and several GB of memory per link.
