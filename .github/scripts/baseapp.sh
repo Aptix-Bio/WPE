@@ -31,7 +31,11 @@ declare -A builder_commit=(
     [x86_64]=50461ee00afa8ae6b133762447dcff6348781568ebebaf0293eed8242f79f20a
     [aarch64]=407fe008ab96d6b9e199d01c95523bef08341090be6e300f2717d7858890db57
 )
-builder=(flatpak run --user org.flatpak.Builder)
+# In a session bus of its own: the builder is sandboxed and installs the SDK
+# through D-Bus, and a runner has no session bus ("Cannot autolaunch D-Bus
+# without X11 $DISPLAY", the first run, 2026-11-15; reproduced here with
+# DBUS_SESSION_BUS_ADDRESS unset, and gone under dbus-run-session).
+builder=(dbus-run-session -- flatpak run --user org.flatpak.Builder)
 # The compiler cache, one archive per architecture in the build-cache bucket;
 # a pull request's under pr/, which main and releases never read and the
 # bucket deletes after 7 days (Iris-Core's tools/cloud_federation.sh).
@@ -79,7 +83,7 @@ case $phase in
 packages)
     # Room for WebKit: the runner's preinstalled toolchains the build never uses.
     sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-    apt_install flatpak
+    apt_install flatpak dbus-daemon   # dbus-daemon: dbus-run-session, for the builder
     # Ubuntu 24.04 confines unprivileged user namespaces through AppArmor,
     # which flatpak-builder's bubblewrap sandbox needs.
     sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
